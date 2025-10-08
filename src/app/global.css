@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-gray-700;
+  }
+  
+  html {
+    @apply bg-[#0f1419];
+  }
+  
+  body {
+    @apply bg-[#0f1419] text-gray-100;
+  }
+  
+  input, textarea, select, button {
+    @apply outline-none focus:outline-none;
+  }
+  
+  input, textarea, select {
+    @apply bg-gray-800 text-gray-100 border-gray-700;
+  }
+  
+  input:focus, textarea:focus, select:focus {
+    @apply border-blue-500 ring-1 ring-blue-500;
+  }
+}
