@@ -5,10 +5,11 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "vite build",
     "preview": "vite preview",
     "server": "node server.js",
-    "start": "npm run build && node server.js",
+    "start": "node server.js",
+    "railway:build": "npm run build",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
     "deploy": "./deploy.sh",
     "deploy:netlify": "npm run build && netlify deploy --prod --dir=dist",
