@@ -1,5 +1,5 @@
-# Use Node.js 20 Alpine image
-FROM node:20-alpine
+# Use Node.js 20 (Debian-based, not Alpine)
+FROM node:20
 
 # Set working directory
 WORKDIR /app
@@ -7,7 +7,9 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Clear npm cache and install dependencies
+RUN npm cache clean --force
+RUN rm -rf node_modules package-lock.json
 RUN npm install
 
 # Copy source code
