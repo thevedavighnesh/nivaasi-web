@@ -8,7 +8,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
+
+console.log('🔍 Environment variables:');
+console.log('PORT from env:', process.env.PORT);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('Final PORT:', PORT);
 
 // Add health check endpoint for Railway
 app.get('/health', (req, res) => {
