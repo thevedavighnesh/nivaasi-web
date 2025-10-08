@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "server": "node server.js",
     "start": "node server.js",
+    "railway:start": "node server.js",
     "railway:build": "npm run build",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
     "deploy": "./deploy.sh",

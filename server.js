@@ -10,6 +10,11 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Add health check endpoint for Railway
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', message: 'Server is running' });
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -478,9 +483,10 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📱 Web app available at http://localhost:${PORT}`);
-  console.log(`🔧 API endpoints available at http://localhost:${PORT}/api/*`);
-  console.log(`📝 Mock API server ready for development`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📱 Web app available`);
+  console.log(`🔧 API endpoints available at /api/*`);
+  console.log(`📝 Mock API server ready for production`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
