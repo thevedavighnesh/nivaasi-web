@@ -1,12 +1,43 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 8080;
+const PORT = Number(process.env.PORT) || 8080;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'dist')));
+
+app.get('/health', (req, res) => {
+  const payload = {
+    status: 'OK',
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    port: PORT,
+    node_env: process.env.NODE_ENV || 'development'
+  };
+  console.log('✅ Health check hit:', payload);
+  res.status(200).json(payload);
+});
+
+app.get('/', (req, res) => {
+  console.log('📡 Root endpoint hit');
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return next();
+  }
+  console.log(`🔁 SPA fallback for ${req.path}`);
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
 
 // Global mock data storage
 if (!global.mockUsers) global.mockUsers = [];
