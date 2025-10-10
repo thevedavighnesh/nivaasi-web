@@ -14,35 +14,62 @@ export default function SignInPage() {
     setLoading(true);
 
     try {
+      // Basic client-side validation
+      if (!email || !password) {
+        setError('Please enter both email and password');
+        setLoading(false);
+        return;
+      }
+
       const response = await fetch('/api/auth/signin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email,
-          password,
-        })
+          email: email.trim(),
+          password: password,
+        }),
+        credentials: 'include' // Important for cookies/session if using them
       });
 
-      const result = await response.json();
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        // Handle HTTP errors
+        if (response.status === 401) {
+          setError(responseData.error || 'Invalid email or password');
+        } else if (response.status === 404) {
+          setError('Server not available. Please ensure the backend server is running.');
+        } else if (response.status >= 500) {
+          setError('Server error. Please try again later.');
+        } else {
+          setError(responseData.error || 'An error occurred. Please try again.');
+        }
+        return;
+      }
 
-      if (!response.ok || result.error) {
-        setError(result.error || 'Invalid email or password');
-      } else {
+      // If we get here, login was successful
+      if (responseData.user) {
         // Store user info in session storage
-        sessionStorage.setItem('user', JSON.stringify(result.user));
+        sessionStorage.setItem('user', JSON.stringify(responseData.user));
         
         // Redirect based on user type
-        if (result.user.userType === 'owner') {
+        if (responseData.user.userType === 'owner') {
           navigate('/owner/dashboard');
         } else {
           navigate('/tenant/dashboard');
         }
+      } else {
+        throw new Error('Invalid response from server');
       }
     } catch (err) {
       console.error('Signin error:', err);
-      setError('An error occurred. Please try again.');
+      if (err.name === 'TypeError' && err.message.includes('fetch')) {
+        setError('Cannot connect to server. Please ensure both frontend and backend servers are running.');
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

@@ -18,8 +18,8 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: process.env.NODE_ENV === 'production' 
-          ? process.env.VITE_BASE_URL || 'http://localhost:3000'
-          : 'http://localhost:3000',
+          ? process.env.VITE_BASE_URL || 'http://localhost:8080'
+          : 'http://localhost:8080',
         changeOrigin: true,
         secure: false,
       },

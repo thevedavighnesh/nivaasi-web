@@ -1,18 +1,27 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate } from 'react-router-dom';
 
 function OwnerDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
-  const [stats, setStats] = useState({
-    properties: 0,
-    tenants: 0,
-    totalRent: 0,
-    pendingPayments: 0
-  });
-  const [properties, setProperties] = useState([]);
-  const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [dashboardData, setDashboardData] = useState({
+    stats: {
+      totalProperties: 0,
+      totalTenants: 0,
+      totalRent: 0,
+      pendingPayments: 0
+    },
+    properties: [],
+    recentTenants: [],
+    recentMaintenance: [],
+    upcomingReminders: [],
+    tenants: [],
+    maintenanceRequests: []
+  });
+  
+  // UI State
   const [showAddProperty, setShowAddProperty] = useState(false);
   const [showAddTenant, setShowAddTenant] = useState(false);
   const [selectedPropertyForTenant, setSelectedPropertyForTenant] = useState(null);
@@ -22,85 +31,158 @@ function OwnerDashboard() {
   const [showViewTenants, setShowViewTenants] = useState(false);
   const [showReports, setShowReports] = useState(false);
   const [showMaintenance, setShowMaintenance] = useState(false);
-  const [maintenanceRequests, setMaintenanceRequests] = useState([]);
-  const [notifications, setNotifications] = useState([]);
+  const [showProfile, setShowProfile] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [showProfile, setShowProfile] = useState(false);
+  const [tenants, setTenants] = useState([]);
+  const [maintenanceRequests, setMaintenanceRequests] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  
+  // Derived state
+  const { stats, properties, recentTenants, recentMaintenance, upcomingReminders } = dashboardData;
 
-  useEffect(() => {
-    // Get user from session
-    const storedUser = sessionStorage.getItem('user');
-    if (!storedUser) {
-      navigate('/account/signin');
-      return;
-    }
-    
-    const userData = JSON.parse(storedUser);
-    if (userData.userType !== 'owner') {
-      navigate('/tenant/dashboard');
-      return;
-    }
-    
-    setUser(userData);
-    loadDashboardData(userData.email);
-  }, [navigate]);
+  const handleLogout = () => {
+    sessionStorage.removeItem('user');
+    navigate('/account/signin');
+  };
 
-  const loadDashboardData = async (email) => {
+  const handleClearNotifications = () => {
+    setNotifications([]);
+    setUnreadCount(0);
+    // Save cleared state to sessionStorage so they don't reappear
+    sessionStorage.setItem('ownerNotifications', JSON.stringify([]));
+    sessionStorage.setItem('ownerUnreadCount', '0');
+  };
+
+  // Load notifications from API
+  const loadNotifications = async (email) => {
+    if (!email) return;
+    
     try {
-      console.log('Loading owner dashboard data for:', email);
+      console.log('📬 Loading notifications for owner:', email);
+      const response = await fetch(`/api/notifications/owner?ownerEmail=${encodeURIComponent(email)}`);
+      const data = await response.json();
       
-      // Fetch properties
-      const propertiesRes = await fetch(`/api/properties/list?ownerEmail=${email}`);
-      let propertiesList = [];
-      if (propertiesRes.ok) {
-        const propertiesData = await propertiesRes.json();
-        propertiesList = propertiesData.properties || [];
-        setProperties(propertiesList);
-        console.log('Properties loaded:', propertiesList.length);
-      } else {
-        console.error('Failed to fetch properties:', propertiesRes.status);
-      }
-
-      // Fetch tenants
-      const tenantsRes = await fetch(`/api/tenants/list?ownerEmail=${email}`);
-      let tenantsList = [];
-      if (tenantsRes.ok) {
-        const tenantsData = await tenantsRes.json();
-        tenantsList = tenantsData.tenants || [];
-        setTenants(tenantsList);
-        console.log('Tenants loaded:', tenantsList.length);
-      } else {
-        console.error('Failed to fetch tenants:', tenantsRes.status);
-      }
-      
-      // Calculate stats
-      const totalRent = tenantsList.reduce((sum, t) => sum + parseFloat(t.rent_amount || 0), 0);
-      const pendingCount = tenantsList.filter(t => t.rent_status === 'pending' || t.rent_status === 'overdue').length;
-      
-      const calculatedStats = {
-        properties: propertiesList.length,
-        tenants: tenantsList.length,
-        totalRent: totalRent,
-        pendingPayments: pendingCount
-      };
-      
-      console.log('Stats calculated:', calculatedStats);
-      setStats(calculatedStats);
-
-      // Fetch notifications
-      const notifRes = await fetch(`/api/notifications/owner?ownerEmail=${email}`);
-      if (notifRes.ok) {
-        const notifData = await notifRes.json();
-        setNotifications(notifData.notifications || []);
-        setUnreadCount(notifData.notifications?.filter(n => !n.read).length || 0);
+      if (data.notifications) {
+        setNotifications(data.notifications);
+        setUnreadCount(data.unreadCount || 0);
+        // Save to sessionStorage
+        sessionStorage.setItem('ownerNotifications', JSON.stringify(data.notifications));
+        sessionStorage.setItem('ownerUnreadCount', (data.unreadCount || 0).toString());
+        console.log('✅ Loaded', data.notifications.length, 'notifications for owner');
       }
     } catch (error) {
-      console.error('Error loading dashboard:', error);
+      console.error('Error loading notifications:', error);
+    }
+  };
+
+  // Handle property removal
+  // Load dashboard data from API
+  const loadDashboardData = async (email) => {
+    try {
+      setLoading(true);
+      setError(null);
+      console.log('Loading owner dashboard data for:', email);
+      
+      const response = await fetch(`/api/owners/dashboard?ownerEmail=${encodeURIComponent(email)}`);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        const errorMessage = data?.error || data?.message || `HTTP error! status: ${response.status}`;
+        console.error('API Error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMessage,
+          data: data
+        });
+        throw new Error(errorMessage);
+      }
+      
+      if (!data.success) {
+        console.error('API returned unsuccessful response:', data);
+        throw new Error(data.error || 'Failed to load dashboard data');
+      }
+      
+      console.log('Dashboard data loaded successfully');
+      // Ensure we always have valid data structures
+      const safeData = {
+        stats: {
+          totalProperties: data.stats?.totalProperties || 0,
+          totalTenants: data.stats?.totalTenants || 0,
+          totalRent: data.stats?.totalRent || 0,
+          pendingPayments: data.stats?.pendingPayments || 0
+        },
+        properties: Array.isArray(data.properties) ? data.properties : [],
+        recentTenants: Array.isArray(data.recentTenants) ? data.recentTenants : [],
+        recentMaintenance: Array.isArray(data.recentMaintenance) ? data.recentMaintenance : [],
+        upcomingReminders: Array.isArray(data.upcomingReminders) ? data.upcomingReminders : [],
+        tenants: Array.isArray(data.tenants) ? data.tenants : [],
+        maintenanceRequests: Array.isArray(data.maintenanceRequests)
+          ? data.maintenanceRequests
+          : Array.isArray(data.recentMaintenance)
+            ? data.recentMaintenance
+            : []
+      };
+
+      setDashboardData(safeData);
+      setTenants(safeData.tenants || []);
+      setMaintenanceRequests(safeData.maintenanceRequests || []);
+
+    } catch (err) {
+      console.error('Error in loadDashboardData:', {
+        error: err,
+        message: err.message,
+        stack: err.stack
+      });
+      
+      setError(err.message || 'Failed to load dashboard data. Please try again later.');
+      
+      // Set some default data
+      setDashboardData({
+        stats: {
+          totalProperties: 0,
+          totalTenants: 0,
+          totalRent: 0,
+          pendingPayments: 0
+        },
+        properties: [],
+        recentTenants: [],
+        recentMaintenance: [],
+        upcomingReminders: [],
+        tenants: [],
+        maintenanceRequests: []
+      });
+      setTenants([]);
+      setMaintenanceRequests([]);
     } finally {
       setLoading(false);
     }
   };
+
+  // Initialize dashboard on component mount
+  useEffect(() => {
+    // Get user from session
+    const storedUser = sessionStorage.getItem('user');
+    if (!storedUser) {
+      handleLogout();
+      return;
+    }
+    
+    try {
+      const userData = JSON.parse(storedUser);
+      if (userData.userType !== 'owner') {
+        navigate('/tenant/dashboard');
+        return;
+      }
+      
+      setUser(userData);
+      loadDashboardData(userData.email);
+      loadNotifications(userData.email);
+    } catch (error) {
+      console.error('Error parsing user data:', error);
+      handleLogout();
+    }
+  }, [navigate]);
 
   const loadMaintenanceRequests = async () => {
     if (!user?.email) return;
@@ -122,9 +204,30 @@ function OwnerDashboard() {
     loadMaintenanceRequests();
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem('user');
-    navigate('/account/signin');
+  const handleRemoveProperty = async (property) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to remove "${property.name}"?\n\nThis will:\n- Remove all connection codes\n- Delete property permanently\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/properties/remove/${property.id}`, {
+        method: 'DELETE'
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        alert(`✅ Property "${property.name}" has been removed successfully`);
+        loadDashboardData(user?.email);
+      } else {
+        alert(`❌ ${data.error || 'Failed to remove property'}`);
+      }
+    } catch (error) {
+      alert('❌ An error occurred while removing property');
+      console.error('Remove property error:', error);
+    }
   };
 
   if (loading) {
@@ -271,27 +374,122 @@ function OwnerDashboard() {
             alignItems: 'center'
           }}>
             <h3 style={{ margin: 0, fontSize: '1rem' }}>Notifications</h3>
-            <button
-              onClick={() => setShowNotifications(false)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#a0aec0',
-                cursor: 'pointer',
-                fontSize: '1.5rem',
-                padding: 0
-              }}
-            >
-              ×
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                onClick={() => loadNotifications(user?.email)}
+                style={{
+                  padding: '0.25rem 0.75rem',
+                  backgroundColor: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '600'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#2563eb'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#3b82f6'}
+                title="Refresh notifications"
+              >
+                🔄 Refresh
+              </button>
+              {notifications.length > 0 && (
+                <button
+                  onClick={handleClearNotifications}
+                  style={{
+                    padding: '0.25rem 0.75rem',
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: '600'
+                  }}
+                  onMouseEnter={(e) => e.target.style.backgroundColor = '#dc2626'}
+                  onMouseLeave={(e) => e.target.style.backgroundColor = '#ef4444'}
+                >
+                  Clear All
+                </button>
+              )}
+              <button
+                onClick={() => setShowNotifications(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#a0aec0',
+                  cursor: 'pointer',
+                  fontSize: '1.5rem',
+                  padding: 0
+                }}
+              >
+                ×
+              </button>
+            </div>
           </div>
 
-          <div style={{ maxHeight: '400px', overflowY: 'auto', padding: '1rem', textAlign: 'center', color: '#a0aec0' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🔔</div>
-            <p>No notifications yet</p>
-            <p style={{ fontSize: '0.75rem', marginTop: '0.5rem' }}>
-              Owner notifications will appear here (e.g., tenant connections, payment confirmations)
-            </p>
+          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+            {notifications.length === 0 ? (
+              <div style={{ padding: '1rem', textAlign: 'center', color: '#a0aec0' }}>
+                <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🔔</div>
+                <p>No notifications yet</p>
+                <p style={{ fontSize: '0.75rem', marginTop: '0.5rem' }}>
+                  Owner notifications will appear here (e.g., tenant connections, payment confirmations)
+                </p>
+              </div>
+            ) : (
+              <div style={{ padding: '0.5rem' }}>
+                {notifications.map((notif, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      padding: '1rem',
+                      margin: '0.5rem',
+                      backgroundColor: notif.read ? '#0f1419' : '#1a2332',
+                      border: `1px solid ${notif.read ? '#2d3748' : '#3b82f6'}`,
+                      borderRadius: '6px',
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => {
+                      const updatedNotifications = [...notifications];
+                      updatedNotifications[index].read = true;
+                      setNotifications(updatedNotifications);
+                      const newUnreadCount = updatedNotifications.filter(n => !n.read).length;
+                      setUnreadCount(newUnreadCount);
+                      // Save to sessionStorage
+                      sessionStorage.setItem('ownerNotifications', JSON.stringify(updatedNotifications));
+                      sessionStorage.setItem('ownerUnreadCount', newUnreadCount.toString());
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
+                      <span style={{
+                        fontSize: '0.75rem',
+                        color: '#3b82f6',
+                        fontWeight: '600',
+                        textTransform: 'uppercase'
+                      }}>
+                        {notif.type || 'General'}
+                      </span>
+                      {!notif.read && (
+                        <span style={{
+                          width: '8px',
+                          height: '8px',
+                          backgroundColor: '#3b82f6',
+                          borderRadius: '50%',
+                          display: 'inline-block'
+                        }} />
+                      )}
+                    </div>
+                    <p style={{ margin: '0 0 0.5rem 0', color: '#f7fafc', fontSize: '0.875rem' }}>
+                      {notif.message}
+                    </p>
+                    <p style={{ margin: 0, color: '#a0aec0', fontSize: '0.75rem' }}>
+                      {notif.timestamp || new Date(notif.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -406,6 +604,7 @@ function OwnerDashboard() {
                     setSelectedPropertyForCode(property);
                     setShowGenerateCode(true);
                   }}
+                  onRemoveProperty={handleRemoveProperty}
                 />
               ))}
             </div>
@@ -469,6 +668,9 @@ function OwnerDashboard() {
         <ViewTenantsModal
           onClose={() => setShowViewTenants(false)}
           tenants={tenants}
+          onSuccess={() => {
+            loadDashboardData(user?.email);
+          }}
         />
       )}
 
@@ -530,7 +732,13 @@ function AddPropertyModal({ onClose, ownerEmail, onSuccess }) {
       const response = await fetch('/api/properties/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formData, ownerEmail })
+        body: JSON.stringify({
+          name: formData.propertyName,  // Map propertyName to name
+          address: formData.address,
+          property_type: formData.propertyType,  // Map propertyType to property_type
+          total_units: formData.units,  // Map units to total_units
+          ownerEmail
+        })
       });
 
       const data = await response.json();
@@ -710,15 +918,15 @@ function AddTenantModal({ onClose, property, onSuccess }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', fontSize: '0.875rem' }}>
             <div>
               <span style={{ color: '#a0aec0', display: 'block', fontSize: '0.75rem' }}>Total Units</span>
-              <span style={{ color: '#f7fafc', fontWeight: '600' }}>{property?.total_units}</span>
+              <span style={{ color: '#f7fafc', fontWeight: '600' }}>{property?.totalUnits || property?.total_units || 0}</span>
             </div>
             <div>
               <span style={{ color: '#a0aec0', display: 'block', fontSize: '0.75rem' }}>Occupied</span>
-              <span style={{ color: '#f59e0b', fontWeight: '600' }}>{property?.occupied_units}</span>
+              <span style={{ color: '#f59e0b', fontWeight: '600' }}>{property?.occupied_units || 0}</span>
             </div>
             <div>
               <span style={{ color: '#a0aec0', display: 'block', fontSize: '0.75rem' }}>Available</span>
-              <span style={{ color: '#10b981', fontWeight: '600' }}>{property?.available_units}</span>
+              <span style={{ color: '#10b981', fontWeight: '600' }}>{property?.available_units || 0}</span>
             </div>
           </div>
           {occupiedUnits.length > 0 && (
@@ -1138,10 +1346,15 @@ function ActionButton({ label, icon, onClick }) {
   );
 }
 
-function PropertyCard({ property, onAddTenant, onGenerateCode }) {
-  const occupancyPercent = (parseInt(property.occupied_units) / parseInt(property.total_units)) * 100;
-  const isFullyOccupied = parseInt(property.occupied_units) >= parseInt(property.total_units);
-  const hasAvailableUnits = parseInt(property.available_units) > 0;
+function PropertyCard({ property, onAddTenant, onGenerateCode, onRemoveProperty }) {
+  // Handle both camelCase and snake_case field names
+  const totalUnits = parseInt(property.totalUnits || property.total_units || 0);
+  const occupiedUnits = parseInt(property.occupied_units || 0);
+  const availableUnits = parseInt(property.available_units || (totalUnits - occupiedUnits));
+  
+  const occupancyPercent = totalUnits > 0 ? (occupiedUnits / totalUnits) * 100 : 0;
+  const isFullyOccupied = occupiedUnits >= totalUnits;
+  const hasAvailableUnits = availableUnits > 0;
 
   return (
     <div style={{
@@ -1166,6 +1379,27 @@ function PropertyCard({ property, onAddTenant, onGenerateCode }) {
                 FULL
               </span>
             )}
+            <button
+              onClick={() => onRemoveProperty(property)}
+              style={{
+                padding: '0.5rem 1rem',
+                backgroundColor: '#ef4444',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: '600',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = '#dc2626'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = '#ef4444'}
+              title="Remove Property"
+            >
+              <span>🗑️</span> Remove
+            </button>
             {hasAvailableUnits && (
               <>
                 <button
@@ -1227,13 +1461,13 @@ function PropertyCard({ property, onAddTenant, onGenerateCode }) {
           </span>
           <span style={{ 
             padding: '0.25rem 0.75rem',
-            backgroundColor: parseInt(property.available_units) > 0 ? '#065f46' : '#7c2d12',
+            backgroundColor: availableUnits > 0 ? '#065f46' : '#7c2d12',
             borderRadius: '6px',
             fontSize: '0.75rem',
             color: '#f7fafc',
             fontWeight: '600'
           }}>
-            {property.occupied_units}/{property.total_units} Units Occupied
+            {occupiedUnits}/{totalUnits} Units Occupied
           </span>
           {hasAvailableUnits && (
             <span style={{ 
@@ -1243,7 +1477,7 @@ function PropertyCard({ property, onAddTenant, onGenerateCode }) {
               fontSize: '0.75rem',
               color: '#f7fafc'
             }}>
-              {property.available_units} Available
+              {availableUnits} Available
             </span>
           )}
         </div>
@@ -1646,7 +1880,7 @@ function ReportsModal({ onClose, properties, tenants, stats, user }) {
 }
 
 // View All Tenants Modal Component
-function ViewTenantsModal({ onClose, tenants }) {
+function ViewTenantsModal({ onClose, tenants, onSuccess }) {
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [removingTenantId, setRemovingTenantId] = useState(null);
@@ -1676,7 +1910,10 @@ function ViewTenantsModal({ onClose, tenants }) {
 
       if (response.ok) {
         alert(`✅ ${tenant.name} has been removed successfully`);
-        window.location.reload(); // Reload to refresh data
+        if (onSuccess) {
+          onSuccess(); // Refresh dashboard data
+        }
+        onClose(); // Close the modal
       } else {
         alert(`❌ ${data.error || 'Failed to remove tenant'}`);
       }
@@ -1940,7 +2177,7 @@ function SendReminderModal({ onClose, tenant, onSuccess }) {
       const data = await response.json();
 
       if (response.ok) {
-        alert(`✅ Reminder sent to ${data.tenant.name}!`);
+        alert(`✅ Reminder sent to ${data.reminder.tenant.name}!`);
         onSuccess();
       } else {
         setError(data.error || data.details || 'Failed to send reminder');

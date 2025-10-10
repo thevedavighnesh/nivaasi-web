@@ -17,6 +17,7 @@ function TenantDashboard() {
   const [showDocuments, setShowDocuments] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [showProfile, setShowProfile] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   useEffect(() => {
     // Get user from session
@@ -39,25 +40,25 @@ function TenantDashboard() {
   const loadDashboardData = async (email) => {
     try {
       console.log('Loading tenant data for:', email);
-      const response = await fetch(`/api/tenants/info?email=${email}`);
+      const response = await fetch(`/api/tenants/dashboard?tenantEmail=${email}`);
       const data = await response.json();
       
       console.log('Tenant info response:', data);
 
-      if (data.property) {
+      if (data.tenant && data.property) {
         setPropertyInfo(data.property);
-        setOwnerInfo(data.owner);
-        
+        setOwnerInfo({ name: 'Property Owner', email: data.property.ownerEmail });
+
         // Ensure rent info has all required fields
         const rentData = {
-          amount: data.rent?.amount || 0,
-          dueDate: data.rent?.dueDate || null,
-          status: data.rent?.status || 'pending',
-          daysUntilDue: data.rent?.daysUntilDue || 0,
-          lastPaymentDate: data.rent?.lastPaymentDate || null,
-          rentDueDay: data.rent?.rentDueDay || 5
+          amount: data.tenant?.rent_amount || 0,
+          dueDate: data.tenant?.rent_due_date || null,
+          status: data.tenant?.rent_status || 'pending',
+          daysUntilDue: data.tenant?.daysUntilDue || 0,
+          lastPaymentDate: data.tenant?.lastPaymentDate || null,
+          rentDueDay: data.tenant?.rentDueDay || 5
         };
-        
+
         console.log('Setting rent info:', rentData);
         setRentInfo(rentData);
       } else {
@@ -67,12 +68,21 @@ function TenantDashboard() {
         setRentInfo({ amount: 0, dueDate: null, status: 'pending', daysUntilDue: 0 });
       }
 
-      // Load notifications
-      const notifResponse = await fetch(`/api/notifications/tenant?tenantEmail=${email}`);
-      const notifData = await notifResponse.json();
-      if (notifData.notifications) {
-        setNotifications(notifData.notifications);
-        setUnreadCount(notifData.notifications.filter(n => !n.read).length);
+      // Always load fresh notifications from API (don't rely on sessionStorage for initial load)
+      try {
+        const notifResponse = await fetch(`/api/notifications/tenant?tenantEmail=${email}`);
+        const notifData = await notifResponse.json();
+        if (notifData.notifications) {
+          setNotifications(notifData.notifications);
+          const unread = notifData.notifications.filter(n => !n.read).length;
+          setUnreadCount(unread);
+          // Save to sessionStorage
+          sessionStorage.setItem('tenantNotifications', JSON.stringify(notifData.notifications));
+          sessionStorage.setItem('tenantUnreadCount', unread.toString());
+          console.log('✅ Loaded', notifData.notifications.length, 'notifications for tenant');
+        }
+      } catch (notifError) {
+        console.error('Error loading notifications:', notifError);
       }
     } catch (error) {
       console.error('Error loading dashboard data:', error);
@@ -90,12 +100,50 @@ function TenantDashboard() {
       });
       
       // Update local state
-      setNotifications(prev => prev.map(n => 
-        n.id === notificationId ? { ...n, read: true } : n
-      ));
-      setUnreadCount(prev => Math.max(0, prev - 1));
+      setNotifications(prev => {
+        const updated = prev.map(n => 
+          n.id === notificationId ? { ...n, read: true } : n
+        );
+        // Save to sessionStorage
+        sessionStorage.setItem('tenantNotifications', JSON.stringify(updated));
+        return updated;
+      });
+      setUnreadCount(prev => {
+        const newCount = Math.max(0, prev - 1);
+        sessionStorage.setItem('tenantUnreadCount', newCount.toString());
+        return newCount;
+      });
     } catch (error) {
       console.error('Error marking notification as read:', error);
+    }
+  };
+
+  const handleClearNotifications = () => {
+    setNotifications([]);
+    setUnreadCount(0);
+    // Save cleared state to sessionStorage so they don't reappear
+    sessionStorage.setItem('tenantNotifications', JSON.stringify([]));
+    sessionStorage.setItem('tenantUnreadCount', '0');
+  };
+
+  const loadNotifications = async (email) => {
+    if (!email) return;
+    
+    try {
+      console.log('📬 Refreshing notifications for tenant:', email);
+      const notifResponse = await fetch(`/api/notifications/tenant?tenantEmail=${email}`);
+      const notifData = await notifResponse.json();
+      if (notifData.notifications) {
+        setNotifications(notifData.notifications);
+        const unread = notifData.notifications.filter(n => !n.read).length;
+        setUnreadCount(unread);
+        // Save to sessionStorage
+        sessionStorage.setItem('tenantNotifications', JSON.stringify(notifData.notifications));
+        sessionStorage.setItem('tenantUnreadCount', unread.toString());
+        console.log('✅ Refreshed', notifData.notifications.length, 'notifications for tenant');
+      }
+    } catch (error) {
+      console.error('Error refreshing notifications:', error);
     }
   };
 
@@ -157,29 +205,6 @@ function TenantDashboard() {
     loadMaintenanceRequests();
   };
 
-  const loadDocuments = async () => {
-    if (!user?.email) {
-      console.warn('Cannot load documents: user email is not set');
-      return;
-    }
-    
-    console.log('📄 Loading documents for email:', user.email);
-    try {
-      const response = await fetch(`/api/documents/tenant?tenantEmail=${encodeURIComponent(user.email)}`);
-      const data = await response.json();
-      console.log('Documents response:', data);
-      
-      if (data.documents) {
-        setDocuments(data.documents);
-        console.log('✅ Loaded', data.documents.length, 'documents');
-      } else if (data.error) {
-        console.error('Documents error:', data.error);
-      }
-    } catch (error) {
-      console.error('Error loading documents:', error);
-    }
-  };
-
   const handleShowDocuments = () => {
     setShowDocuments(true);
     loadDocuments();
@@ -187,6 +212,49 @@ function TenantDashboard() {
 
   const handleShowProfile = () => {
     setShowProfile(true);
+  };
+
+  const handleShowPaymentModal = () => {
+    setShowPaymentModal(true);
+  };
+
+  const handlePaymentSubmit = async (amount, paymentMethod, notes) => {
+    if (!user?.email) {
+      console.warn('Cannot submit payment: user email is not set');
+      return;
+    }
+
+    console.log('💰 Submitting payment:', { amount, paymentMethod, notes });
+
+    try {
+      const response = await fetch('/api/payments/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantEmail: user.email,
+          amount,
+          paymentMethod,
+          notes
+        })
+      });
+
+      const data = await response.json();
+      console.log('Payment submission response:', data);
+
+      if (response.ok) {
+        alert('✅ Payment submitted successfully!');
+        setShowPaymentModal(false);
+        // Refresh dashboard data to show updated rent status
+        loadDashboardData(user.email);
+        // Refresh payment history
+        loadPaymentHistory();
+      } else {
+        alert('❌ ' + (data.error || 'Failed to submit payment'));
+      }
+    } catch (error) {
+      console.error('Error submitting payment:', error);
+      alert('❌ An error occurred while submitting payment');
+    }
   };
 
   const handleLogout = () => {
@@ -338,19 +406,58 @@ function TenantDashboard() {
             alignItems: 'center'
           }}>
             <h3 style={{ margin: 0, fontSize: '1rem' }}>Notifications</h3>
-            <button
-              onClick={() => setShowNotifications(false)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#a0aec0',
-                cursor: 'pointer',
-                fontSize: '1.5rem',
-                padding: 0
-              }}
-            >
-              ×
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                onClick={() => loadNotifications(user?.email)}
+                style={{
+                  padding: '0.25rem 0.75rem',
+                  backgroundColor: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  fontWeight: '600'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#2563eb'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#3b82f6'}
+                title="Refresh notifications"
+              >
+                🔄 Refresh
+              </button>
+              {notifications.length > 0 && (
+                <button
+                  onClick={handleClearNotifications}
+                  style={{
+                    padding: '0.25rem 0.75rem',
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    fontWeight: '600'
+                  }}
+                  onMouseEnter={(e) => e.target.style.backgroundColor = '#dc2626'}
+                  onMouseLeave={(e) => e.target.style.backgroundColor = '#ef4444'}
+                >
+                  Clear All
+                </button>
+              )}
+              <button
+                onClick={() => setShowNotifications(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#a0aec0',
+                  cursor: 'pointer',
+                  fontSize: '1.5rem',
+                  padding: 0
+                }}
+              >
+                ×
+              </button>
+            </div>
           </div>
 
           <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
@@ -381,10 +488,10 @@ function TenantDashboard() {
                       fontWeight: '600',
                       color: '#f7fafc'
                     }}>
-                      {notif.reminder_type === 'payment' ? '💰' : 
-                       notif.reminder_type === 'lease' ? '📄' :
-                       notif.reminder_type === 'maintenance' ? '🔧' : '📢'} 
-                      {' '}{notif.reminder_type.charAt(0).toUpperCase() + notif.reminder_type.slice(1)} Reminder
+                      {notif.type === 'payment' ? '💰' : 
+                       notif.type === 'lease' ? '📄' :
+                       notif.type === 'maintenance' ? '🔧' : '📢'} 
+                      {' '}{notif.type?.charAt(0).toUpperCase() + notif.type?.slice(1) || 'General'} Update
                     </span>
                     {!notif.read && (
                       <span style={{
@@ -408,7 +515,7 @@ function TenantDashboard() {
                     fontSize: '0.75rem',
                     color: '#a0aec0'
                   }}>
-                    From: {notif.owner_name} • {new Date(notif.sent_at).toLocaleDateString()}
+                    From: {notif.owner_name} • {new Date(notif.sent_at || notif.createdAt).toLocaleDateString()}
                   </p>
                 </div>
               ))
@@ -512,7 +619,7 @@ function TenantDashboard() {
                 </div>
                 {rentInfo?.status !== 'paid' && (
                   <button
-                    onClick={() => alert('Contact your property owner to record payment')}
+                    onClick={handleShowPaymentModal}
                     style={{
                       padding: '0.75rem 2rem',
                       backgroundColor: rentInfo?.status === 'overdue' ? '#ef4444' : '#3b82f6',
@@ -645,9 +752,19 @@ function TenantDashboard() {
             onClose={() => setShowMaintenance(false)}
             requests={maintenanceRequests}
             tenantEmail={user?.email}
+            propertyInfo={propertyInfo}
             onSuccess={() => {
               loadMaintenanceRequests();
             }}
+          />
+        )}
+
+        {/* Payment Modal */}
+        {showPaymentModal && (
+          <PaymentModal
+            onClose={() => setShowPaymentModal(false)}
+            rentAmount={rentInfo.amount}
+            onSubmit={handlePaymentSubmit}
           />
         )}
 
@@ -662,6 +779,250 @@ function TenantDashboard() {
             }}
           />
         )}
+      </div>
+    </div>
+  );
+}
+
+// Payment Modal Component
+function PaymentModal({ onClose, rentAmount, onSubmit }) {
+  const [formData, setFormData] = useState({
+    amount: rentAmount || '',
+    paymentMethod: 'upi',
+    notes: ''
+  });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [onClose]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      await onSubmit(
+        parseFloat(formData.amount),
+        formData.paymentMethod,
+        formData.notes
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.75)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '1rem',
+        overflowY: 'auto'
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          backgroundColor: '#1a1f2e',
+          borderRadius: '12px',
+          maxWidth: '500px',
+          width: '100%',
+          maxHeight: '90vh',
+          overflow: 'auto',
+          margin: '2rem 0'
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          padding: '1.5rem',
+          borderBottom: '1px solid #2d3748',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h2 style={{ margin: 0, fontSize: '1.5rem', color: '#f7fafc' }}>
+            💰 Submit Payment
+          </h2>
+          <button
+            onClick={onClose}
+            title="Close (ESC)"
+            style={{
+              background: '#2d3748',
+              border: 'none',
+              color: '#f7fafc',
+              fontSize: '1.5rem',
+              cursor: 'pointer',
+              padding: '0.5rem',
+              lineHeight: 1,
+              borderRadius: '6px',
+              width: '36px',
+              height: '36px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#ef4444';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#2d3748';
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: '2rem' }}>
+          <form onSubmit={handleSubmit}>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#cbd5e0' }}>
+                Monthly Rent Amount
+              </label>
+              <div style={{
+                padding: '1rem',
+                backgroundColor: '#0f1419',
+                border: '1px solid #2d3748',
+                borderRadius: '6px',
+                color: '#f7fafc',
+                fontSize: '1.25rem',
+                fontWeight: '600'
+              }}>
+                ₹{rentAmount.toLocaleString()}
+              </div>
+              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.75rem', color: '#a0aec0' }}>
+                This is your monthly rent amount
+              </p>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#cbd5e0' }}>
+                Payment Amount *
+              </label>
+              <input
+                type="number"
+                value={formData.amount}
+                onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                required
+                min="1"
+                step="0.01"
+                placeholder="Enter payment amount"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  backgroundColor: '#0f1419',
+                  border: '1px solid #2d3748',
+                  borderRadius: '6px',
+                  color: '#f7fafc',
+                  fontSize: '1rem'
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#cbd5e0' }}>
+                Payment Method *
+              </label>
+              <select
+                value={formData.paymentMethod}
+                onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                required
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  backgroundColor: '#0f1419',
+                  border: '1px solid #2d3748',
+                  borderRadius: '6px',
+                  color: '#f7fafc',
+                  fontSize: '1rem'
+                }}
+              >
+                <option value="cash">💵 Cash</option>
+                <option value="bank_transfer">🏦 Bank Transfer</option>
+                <option value="upi">📱 UPI</option>
+                <option value="card">💳 Credit/Debit Card</option>
+                <option value="cheque">📄 Cheque</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: '2rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#cbd5e0' }}>
+                Notes (Optional)
+              </label>
+              <textarea
+                value={formData.notes}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                placeholder="Add any notes about this payment..."
+                rows="3"
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  backgroundColor: '#0f1419',
+                  border: '1px solid #2d3748',
+                  borderRadius: '6px',
+                  color: '#f7fafc',
+                  fontSize: '1rem',
+                  resize: 'vertical'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  backgroundColor: '#2d3748',
+                  color: '#f7fafc',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: '600'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading || !formData.amount}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  backgroundColor: loading || !formData.amount ? '#4a5568' : '#10b981',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: loading || !formData.amount ? 'not-allowed' : 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  opacity: loading || !formData.amount ? 0.6 : 1
+                }}
+              >
+                {loading ? 'Submitting...' : '💰 Submit Payment'}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -1382,7 +1743,7 @@ function TenantProfileModal({ onClose, user, onSuccess }) {
 }
 
 // Maintenance Modal Component
-function MaintenanceModal({ onClose, requests, tenantEmail, onSuccess }) {
+function MaintenanceModal({ onClose, requests, tenantEmail, propertyInfo, onSuccess }) {
   const [showNewRequest, setShowNewRequest] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
@@ -1413,11 +1774,12 @@ function MaintenanceModal({ onClose, requests, tenantEmail, onSuccess }) {
     });
 
     try {
-      const response = await fetch('/api/maintenance/create', {
+      const response = await fetch('/api/maintenance/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tenantEmail,
+          propertyId: propertyInfo?.id || 'demo-property-id', // Use actual property ID or fallback
           ...formData
         })
       });
@@ -1717,7 +2079,7 @@ function MaintenanceModal({ onClose, requests, tenantEmail, onSuccess }) {
                     </div>
                   </div>
                   <p style={{ margin: 0, fontSize: '0.75rem', color: '#a0aec0' }}>
-                    📅 Submitted: {new Date(request.created_at).toLocaleDateString('en-IN', { 
+                    📅 Submitted: {new Date(request.createdAt || request.created_at).toLocaleDateString('en-IN', { 
                       day: 'numeric', 
                       month: 'long', 
                       year: 'numeric' 
@@ -1742,7 +2104,7 @@ function MaintenanceModal({ onClose, requests, tenantEmail, onSuccess }) {
   );
 }
 
-// Documents Modal Component  
+// Documents Modal Component
 function DocumentsModal({ onClose, documents }) {
   useEffect(() => {
     const handleEscape = (e) => {
@@ -1755,7 +2117,7 @@ function DocumentsModal({ onClose, documents }) {
   }, [onClose]);
 
   return (
-    <div 
+    <div
       onClick={onClose}
       style={{
         position: 'fixed',
@@ -1772,7 +2134,7 @@ function DocumentsModal({ onClose, documents }) {
         overflowY: 'auto'
       }}
     >
-      <div 
+      <div
         onClick={(e) => e.stopPropagation()}
         style={{
           backgroundColor: '#1a1f2e',
@@ -1821,7 +2183,7 @@ function DocumentsModal({ onClose, documents }) {
               e.currentTarget.style.backgroundColor = '#2d3748';
             }}
           >
-            ×
+            
           </button>
         </div>
 

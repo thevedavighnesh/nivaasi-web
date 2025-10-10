@@ -1,0 +1,1100 @@
+import bcrypt from 'bcrypt';
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+console.log('🔍 Environment variables:');
+console.log('PORT from env:', process.env.PORT);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('Final PORT:', PORT);
+
+// Add health check endpoints for Railway
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'OK', 
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    port: PORT
+  });
+});
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('dist'));
+
+// Mock data for development
+const mockUsers = [
+  {
+    id: 1,
+    name: 'Test Owner',
+    email: 'owner@example.com',
+    // Password is 'password123' hashed
+    password: '$2b$10$HfQLClgPVHwXXZP/8s1Aeec.seAzU9f23ublKqo11E5PB0BsesYfq',
+    userType: 'owner'
+  },
+  {
+    id: 2,
+    name: 'Test Tenant',
+    email: 'tenant@example.com',
+    // Password is 'password123' hashed
+    password: '$2b$10$HfQLClgPVHwXXZP/8s1Aeec.seAzU9f23ublKqo11E5PB0BsesYfq',
+    userType: 'tenant'
+  }
+];
+
+const mockProperties = [];
+const mockTenants = [];
+const mockPayments = [];
+
+// Authentication Routes
+app.post('/api/auth/signup', async (req, res) => {
+  const { name, email, phone, password, userType } = req.body;
+  
+  if (!name || !email || !password || !userType) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Validate email format
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  // Validate password strength
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+  }
+
+  // Check if user already exists
+  const existingUser = mockUsers.find(u => u.email === email);
+  if (existingUser) {
+    return res.status(400).json({ error: 'Email already registered' });
+  }
+
+  try {
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = {
+      id: Date.now(),
+      name,
+      email,
+      password: hashedPassword, // Store hashed password
+      phone: phone || '',
+      userType,
+      createdAt: new Date().toISOString()
+    };
+
+    mockUsers.push(newUser);
+
+    // Don't send password hash back to client
+    const { password: _, ...userWithoutPassword } = newUser;
+
+    res.status(201).json({
+      message: 'Account created successfully',
+      user: userWithoutPassword
+    });
+  } catch (error) {
+    console.error('Signup error:', error);
+    res.status(500).json({ error: 'Error creating account' });
+  }
+});
+
+
+app.post('/api/auth/signin', async (req, res) => {
+  const { email, password } = req.body;
+  
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  // Find user by email
+  const user = mockUsers.find(u => u.email === email);
+  
+  // If user doesn't exist, return error
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+
+  // Compare hashed password
+  const isPasswordValid = await bcrypt.compare(password, user.password);
+  
+  // If password doesn't match, return error
+  if (!isPasswordValid) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+
+  // If we get here, login is successful
+  res.json({
+    message: 'Sign in successful',
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      userType: user.userType
+    }
+  });
+});
+
+// Properties Routes
+app.get('/api/properties/list', (req, res) => {
+  const { ownerEmail } = req.query;
+
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+
+  const properties = global.mockProperties.filter(p => p.ownerEmail === ownerEmail);
+  res.json({ properties });
+});
+
+app.post('/api/properties/add', (req, res) => {
+  const { propertyName, address, propertyType, units, ownerEmail } = req.body;
+
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+
+  const newProperty = {
+    id: Date.now(),
+    name: propertyName,
+    address,
+    property_type: propertyType,
+    total_units: units,
+    occupied_units: 0,
+    available_units: units,
+    ownerEmail,
+    createdAt: new Date().toISOString()
+  };
+
+  global.mockProperties.push(newProperty);
+  res.json({ message: 'Property added successfully', property: newProperty });
+});
+
+// Tenants Routes
+app.get('/api/tenants/list', (req, res) => {
+  const { ownerEmail } = req.query;
+
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+  if (!global.mockTenants) {
+    global.mockTenants = [];
+  }
+
+  const ownerProperties = global.mockProperties.filter(p => p.ownerEmail === ownerEmail);
+  const propertyIds = ownerProperties.map(p => p.id);
+  const tenants = global.mockTenants.filter(t => propertyIds.includes(t.propertyId));
+  res.json({ tenants });
+});
+
+app.post('/api/tenants/add', (req, res) => {
+  const { propertyId, tenantEmail, unit, rentAmount, rentDueDate } = req.body;
+
+  if (!global.mockTenants) {
+    global.mockTenants = [];
+  }
+
+  const newTenant = {
+    id: Date.now(),
+    propertyId,
+    email: tenantEmail,
+    name: tenantEmail.split('@')[0],
+    unit,
+    rent_amount: rentAmount,
+    rent_due_date: rentDueDate,
+    rent_status: 'pending',
+    createdAt: new Date().toISOString()
+  };
+
+  global.mockTenants.push(newTenant);
+
+  // Update property occupancy
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+  const property = global.mockProperties.find(p => p.id === propertyId);
+  if (property) {
+    property.occupied_units += 1;
+    property.available_units -= 1;
+  }
+
+  res.json({ message: 'Tenant added successfully', tenant: newTenant });
+});
+
+// Payments Routes
+app.post('/api/payments/record', (req, res) => {
+  const { tenantEmail, amount, paymentDate, paymentMethod, notes } = req.body;
+
+  if (!global.mockPayments) {
+    global.mockPayments = [];
+  }
+
+  const payment = {
+    id: Date.now(),
+    tenantEmail,
+    amount: parseFloat(amount),
+    paymentDate,
+    paymentMethod,
+    notes: notes || '',
+    createdAt: new Date().toISOString()
+  };
+
+  global.mockPayments.push(payment);
+
+  // Update tenant rent status
+  if (!global.mockTenants) {
+    global.mockTenants = [];
+  }
+  const tenant = global.mockTenants.find(t => t.email === tenantEmail);
+  if (tenant) {
+    tenant.rent_status = 'paid';
+  }
+
+  res.json({ message: 'Payment recorded successfully', payment });
+});
+
+// Property Code Generation Routes
+app.post('/api/properties/generate-code', (req, res) => {
+  const { propertyId, unit, rentAmount } = req.body;
+  
+  if (!propertyId || !unit || !rentAmount) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Generate a unique 6-digit code
+  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+  
+  const connectionCode = {
+    id: Date.now(),
+    code,
+    propertyId,
+    unit,
+    rentAmount: parseFloat(rentAmount),
+    isUsed: false,
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+    createdAt: new Date().toISOString()
+  };
+
+  // Store the code (in a real app, this would be in a database)
+  if (!global.mockConnectionCodes) {
+    global.mockConnectionCodes = [];
+  }
+  global.mockConnectionCodes.push(connectionCode);
+
+  res.json({ 
+    message: 'Connection code generated successfully',
+    code: connectionCode.code,
+    expiresAt: connectionCode.expiresAt
+  });
+});
+
+// Get occupied units for a property
+app.get('/api/properties/occupied-units', (req, res) => {
+  const { propertyId } = req.query;
+  
+  if (!propertyId) {
+    return res.status(400).json({ error: 'Property ID is required' });
+  }
+
+  const occupiedUnits = mockTenants
+    .filter(t => t.propertyId == propertyId)
+    .map(t => t.unit)
+    .filter(unit => unit);
+
+  res.json({ occupiedUnits });
+});
+
+// Tenant connection with code
+app.post('/api/tenants/connect-with-code', (req, res) => {
+  const { code, tenantEmail } = req.body;
+  
+  if (!code || !tenantEmail) {
+    return res.status(400).json({ error: 'Code and tenant email are required' });
+  }
+
+  if (!global.mockConnectionCodes) {
+    global.mockConnectionCodes = [];
+  }
+
+  const connectionCode = global.mockConnectionCodes.find(c => 
+    c.code === code.toUpperCase() && 
+    !c.isUsed && 
+    new Date(c.expiresAt) > new Date()
+  );
+
+  if (!connectionCode) {
+    return res.status(400).json({ error: 'Invalid or expired code' });
+  }
+
+  // Mark code as used
+  connectionCode.isUsed = true;
+
+  // Create tenant connection
+  const newTenant = {
+    id: Date.now(),
+    propertyId: connectionCode.propertyId,
+    email: tenantEmail,
+    name: tenantEmail.split('@')[0],
+    unit: connectionCode.unit,
+    rent_amount: connectionCode.rentAmount,
+    rent_due_date: new Date().toISOString().split('T')[0],
+    rent_status: 'pending',
+    createdAt: new Date().toISOString()
+  };
+
+  // Ensure global arrays exist
+  if (!global.mockTenants) {
+    global.mockTenants = [];
+  }
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+
+  global.mockTenants.push(newTenant);
+
+  // Update property occupancy
+  const property = global.mockProperties.find(p => p.id === connectionCode.propertyId);
+  if (property) {
+    property.occupied_units += 1;
+    property.available_units -= 1;
+  }
+
+  res.json({ 
+    message: 'Successfully connected to property',
+    tenant: newTenant,
+    property: property
+  });
+});
+
+// Maintenance Routes
+app.get('/api/maintenance/owner', (req, res) => {
+  const { ownerEmail } = req.query;
+
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+
+  // Get properties owned by this owner
+  const ownerProperties = global.mockProperties.filter(p => p.ownerEmail === ownerEmail);
+  const propertyIds = ownerProperties.map(p => p.id);
+
+  // Get maintenance requests for these properties
+  const requests = global.mockMaintenanceRequests.filter(r =>
+    propertyIds.includes(r.propertyId)
+  );
+
+  res.json({ requests });
+});
+
+app.post('/api/maintenance/submit', (req, res) => {
+  const { tenantEmail, propertyId, title, description, priority } = req.body;
+  
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  const request = {
+    id: Date.now(),
+    tenantEmail,
+    propertyId,
+    title,
+    description,
+    priority: priority || 'medium',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  global.mockMaintenanceRequests.push(request);
+
+  res.json({ 
+    message: 'Maintenance request submitted successfully',
+    request 
+  });
+});
+
+// Alternative maintenance update endpoints for compatibility
+app.put('/api/maintenance/:id/status', (req, res) => {
+  const { id } = req.params;
+  const { status, response } = req.body;
+
+  if (!id || !status) {
+    return res.status(400).json({ error: 'Request ID and status are required' });
+  }
+
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  const request = global.mockMaintenanceRequests.find(r => r.id == id);
+
+  if (!request) {
+    return res.status(404).json({ error: 'Maintenance request not found' });
+  }
+
+  request.status = status;
+  if (response) {
+    request.response = response;
+  }
+  if (status === 'completed' && !request.resolved_at) {
+    request.resolved_at = new Date().toISOString();
+  }
+  request.updatedAt = new Date().toISOString();
+
+  res.json({
+    message: 'Maintenance request updated successfully',
+    request
+  });
+});
+
+app.patch('/api/maintenance/:id', (req, res) => {
+  const { id } = req.params;
+  const { status, response } = req.body;
+
+  if (!id || !status) {
+    return res.status(400).json({ error: 'Request ID and status are required' });
+  }
+
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  const request = global.mockMaintenanceRequests.find(r => r.id == id);
+
+  if (!request) {
+    return res.status(404).json({ error: 'Maintenance request not found' });
+  }
+
+  request.status = status;
+  if (response) {
+    request.response = response;
+  }
+  if (status === 'completed' && !request.resolved_at) {
+    request.resolved_at = new Date().toISOString();
+  }
+  request.updatedAt = new Date().toISOString();
+
+  res.json({
+    message: 'Maintenance request updated successfully',
+    request
+  });
+});
+
+// Notifications Routes
+app.get('/api/notifications/owner', (req, res) => {
+  const { ownerEmail } = req.query;
+  
+  // Mock notifications for development
+  const notifications = [
+    {
+      id: 1,
+      type: 'payment',
+      title: 'Payment Received',
+      message: 'Rent payment received from John Doe',
+      read: false,
+      createdAt: new Date().toISOString()
+    }
+  ];
+
+  res.json({ notifications });
+});
+
+app.get('/api/notifications/tenant', (req, res) => {
+  const { tenantEmail } = req.query;
+
+  // Get dynamic notifications for this tenant (including reminders)
+  const dynamicNotifications = global.mockTenantNotifications ?
+    global.mockTenantNotifications[tenantEmail] || [] : [];
+
+  // Combine with static mock notifications for backward compatibility
+  const staticNotifications = [
+    {
+      id: 'static-1',
+      type: 'maintenance',
+      title: 'Maintenance Update',
+      message: 'Your maintenance request has been updated',
+      owner_name: 'Property Management',
+      sent_at: new Date().toISOString(),
+      read: false
+    }
+  ];
+
+  const allNotifications = [...dynamicNotifications, ...staticNotifications];
+
+  res.json({ notifications: allNotifications });
+});
+
+// Tenant Dashboard Routes
+app.get('/api/tenants/dashboard', (req, res) => {
+  const { tenantEmail } = req.query;
+
+  if (!tenantEmail) {
+    return res.status(400).json({ error: 'Tenant email is required' });
+  }
+
+  if (!global.mockTenants) {
+    global.mockTenants = [];
+  }
+  if (!global.mockProperties) {
+    global.mockProperties = [];
+  }
+  if (!global.mockPayments) {
+    global.mockPayments = [];
+  }
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  // Find tenant data
+  const tenant = global.mockTenants.find(t => t.email === tenantEmail);
+
+  if (!tenant) {
+    return res.json({
+      tenant: null,
+      property: null,
+      payments: [],
+      maintenanceRequests: []
+    });
+  }
+
+  // Find property data
+  const property = global.mockProperties.find(p => p.id === tenant.propertyId);
+
+  // Find payments for this tenant
+  const payments = global.mockPayments.filter(p => p.tenantEmail === tenantEmail);
+
+  // Find maintenance requests for this tenant
+  const maintenanceRequests = global.mockMaintenanceRequests ?
+    global.mockMaintenanceRequests.filter(r => r.tenantEmail === tenantEmail) : [];
+
+  res.json({
+    tenant: {
+      ...tenant,
+      property_name: property?.name,
+      property_address: property?.address
+    },
+    property,
+    payments,
+    maintenanceRequests
+  });
+});
+
+// Additional profile update endpoints for compatibility
+app.put('/api/users/profile', (req, res) => {
+  const { email, name, phone } = req.body;
+
+  const userIndex = mockUsers.findIndex(u => u.email === email);
+
+  if (userIndex === -1) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // Update user data
+  mockUsers[userIndex] = {
+    ...mockUsers[userIndex],
+    name: name || mockUsers[userIndex].name,
+    phone: phone || mockUsers[userIndex].phone,
+    updatedAt: new Date().toISOString()
+  };
+
+  res.json({
+    message: 'Profile updated successfully',
+    user: mockUsers[userIndex]
+  });
+});
+
+app.patch('/api/users/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, phone } = req.body;
+
+  const userIndex = mockUsers.findIndex(u => u.id == id);
+
+  if (userIndex === -1) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // Update user data
+  mockUsers[userIndex] = {
+    ...mockUsers[userIndex],
+    name: name || mockUsers[userIndex].name,
+    phone: phone || mockUsers[userIndex].phone,
+    updatedAt: new Date().toISOString()
+  };
+
+  res.json({
+    message: 'Profile updated successfully',
+    user: mockUsers[userIndex]
+  });
+});
+
+// Additional maintenance management endpoints
+app.get('/api/maintenance/all', (req, res) => {
+  const { ownerEmail } = req.query;
+
+  if (!ownerEmail) {
+    return res.status(400).json({ error: 'Owner email is required' });
+  }
+
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  // Get properties owned by this owner
+  const ownerProperties = global.mockProperties ?
+    global.mockProperties.filter(p => p.ownerEmail === ownerEmail) : [];
+  const propertyIds = ownerProperties.map(p => p.id);
+
+  // Get maintenance requests for these properties
+  const requests = global.mockMaintenanceRequests.filter(r =>
+    propertyIds.includes(r.propertyId)
+  );
+
+  res.json({ requests });
+});
+
+app.post('/api/maintenance/:id/complete', (req, res) => {
+  const { id } = req.params;
+  const { response } = req.body;
+
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  const request = global.mockMaintenanceRequests.find(r => r.id == id);
+
+  if (!request) {
+    return res.status(404).json({ error: 'Maintenance request not found' });
+  }
+
+  request.status = 'completed';
+  if (response) {
+    request.response = response;
+  }
+  if (!request.resolved_at) {
+    request.resolved_at = new Date().toISOString();
+  }
+
+  // User profile routes
+app.get('/api/users/profile', (req, res) => {
+  const { email } = req.query;
+
+  const user = mockUsers.find(u => u.email === email);
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  res.json({ user });
+});
+
+app.patch('/api/users/profile', (req, res) => {
+  const { email, name, phone } = req.body;
+
+  const userIndex = mockUsers.findIndex(u => u.email === email);
+
+  if (userIndex === -1) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // Update user data
+  mockUsers[userIndex] = {
+    ...mockUsers[userIndex],
+    name: name || mockUsers[userIndex].name,
+    phone: phone || mockUsers[userIndex].phone,
+    updatedAt: new Date().toISOString()
+  };
+
+  res.json({
+    message: 'Profile updated successfully',
+    user: mockUsers[userIndex]
+  });
+});
+app.get('/api/notifications/tenant', (req, res) => {
+  const { tenantEmail } = req.query;
+
+  // Get dynamic notifications for this tenant (including reminders)
+  const dynamicNotifications = global.mockTenantNotifications ?
+    global.mockTenantNotifications[tenantEmail] || [] : [];
+
+  // Combine with static mock notifications for backward compatibility
+  const staticNotifications = [
+    {
+      id: 'static-1',
+      type: 'payment',
+      reminder_type: 'payment',
+      message: 'Your rent payment is due in 5 days.',
+      owner_name: 'Property Owner',
+      sent_at: new Date().toISOString(),
+      read: false
+    },
+    {
+      id: 'static-2',
+      type: 'maintenance',
+      reminder_type: 'maintenance',
+      message: 'Your maintenance request has been completed.',
+      owner_name: 'Property Owner',
+      sent_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      read: true
+    }
+  ];
+
+  const allNotifications = [...dynamicNotifications, ...staticNotifications];
+
+  res.json({ notifications: allNotifications });
+});
+
+// Payment Routes
+app.post('/api/payments/submit', (req, res) => {
+  const { tenantEmail, amount, paymentMethod, notes } = req.body;
+
+  if (!tenantEmail || !amount) {
+    return res.status(400).json({ error: 'Tenant email and amount are required' });
+  }
+
+  // Ensure global arrays exist
+  if (!global.mockPayments) {
+    global.mockPayments = [];
+  }
+
+  const payment = {
+    id: Date.now(),
+    tenantEmail,
+    amount: parseFloat(amount),
+    payment_method: paymentMethod || 'cash',
+    paid_date: new Date().toISOString().split('T')[0],
+    status: 'completed',
+    notes: notes || 'Payment submitted via tenant dashboard',
+    createdAt: new Date().toISOString()
+  };
+
+  global.mockPayments.push(payment);
+
+  // Update tenant rent status to 'paid' if payment amount matches rent
+  const tenant = global.mockTenants.find(t => t.email === tenantEmail);
+  if (tenant && parseFloat(amount) >= parseFloat(tenant.rent_amount)) {
+    tenant.rent_status = 'paid';
+  }
+
+  res.json({
+    message: 'Payment submitted successfully',
+    payment
+  });
+});
+
+app.get('/api/payments/history', (req, res) => {
+  const { tenantEmail } = req.query;
+
+  if (!tenantEmail) {
+    return res.status(400).json({ error: 'Tenant email is required' });
+  }
+
+  // Ensure global arrays exist
+  if (!global.mockPayments) {
+    global.mockPayments = [];
+  }
+
+  // Get actual payment history for this tenant
+  const actualPayments = global.mockPayments.filter(p => p.tenantEmail === tenantEmail);
+
+  // Add some mock payments for backward compatibility if no actual payments exist
+  const mockPaymentsData = [
+    {
+      id: 1,
+      tenantEmail: tenantEmail,
+      amount: 15000,
+      payment_method: 'bank_transfer',
+      paid_date: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      status: 'completed',
+      notes: 'Monthly rent payment'
+    },
+    {
+      id: 2,
+      tenantEmail: tenantEmail,
+      amount: 15000,
+      payment_method: 'upi',
+      paid_date: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      status: 'completed',
+      notes: 'Monthly rent payment'
+    }
+  ];
+
+  const allPayments = actualPayments.length > 0 ? actualPayments : mockPaymentsData;
+
+  res.json({ payments: allPayments });
+});
+
+app.get('/api/maintenance/tenant', (req, res) => {
+  const { tenantEmail } = req.query;
+
+  if (!global.mockMaintenanceRequests) {
+    global.mockMaintenanceRequests = [];
+  }
+
+  // Get only dynamic maintenance requests for this tenant (no static mocks)
+  const tenantRequests = global.mockMaintenanceRequests.filter(r => r.tenantEmail === tenantEmail);
+
+  res.json({ requests: tenantRequests });
+});
+
+app.get('/api/documents/tenant', (req, res) => {
+  const { tenantEmail } = req.query;
+
+  // Mock documents for development
+  const documents = [
+    {
+      id: 1,
+      document_name: 'Lease Agreement',
+      document_type: 'lease',
+      document_url: '/documents/lease-agreement.pdf',
+      created_at: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+    },
+    {
+      id: 2,
+      document_name: 'Rent Receipt - September 2024',
+      document_type: 'receipt',
+      document_url: '/documents/receipt-sep-2024.pdf',
+      created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    }
+  ];
+
+  res.json({ documents });
+});
+
+// Reminders Routes
+app.post('/api/reminders/send', (req, res) => {
+  const { tenantId, message, reminderType } = req.body;
+
+  if (!tenantId || !message) {
+    return res.status(400).json({ error: 'Tenant ID and message are required' });
+  }
+
+  // Find the tenant
+  const tenant = global.mockTenants.find(t => t.id == tenantId);
+  if (!tenant) {
+    return res.status(404).json({ error: 'Tenant not found' });
+  }
+
+  // Create a reminder record
+  const reminder = {
+    id: Date.now(),
+    tenantId,
+    tenantEmail: tenant.email,
+    tenantName: tenant.name,
+    message,
+    reminderType: reminderType || 'general',
+    sentAt: new Date().toISOString(),
+    status: 'sent'
+  };
+
+  // Store the reminder (in a real app, this would be in a database)
+  if (!global.mockReminders) {
+    global.mockReminders = [];
+  }
+  global.mockReminders.push(reminder);
+
+  // Also add to tenant notifications for the tenant dashboard
+  const notification = {
+    id: Date.now(),
+    type: reminderType || 'general',
+    title: `${reminderType ? reminderType.charAt(0).toUpperCase() + reminderType.slice(1) : 'General'} Reminder`,
+    message,
+    owner_name: 'Property Management',
+    sent_at: new Date().toISOString(),
+    read: false
+  };
+
+  // Add to tenant notifications (this will be returned by /api/notifications/tenant)
+  if (!global.mockTenantNotifications) {
+    global.mockTenantNotifications = {};
+  }
+  if (!global.mockTenantNotifications[tenant.email]) {
+    global.mockTenantNotifications[tenant.email] = [];
+  }
+  global.mockTenantNotifications[tenant.email].push(notification);
+
+  res.json({
+    message: 'Reminder sent successfully',
+    reminder,
+    tenant: {
+      name: tenant.name,
+      email: tenant.email
+    }
+  });
+});
+
+// Tenant Management Routes
+app.post('/api/tenants/remove', (req, res) => {
+  const { tenantId } = req.body;
+
+  if (!tenantId) {
+    return res.status(400).json({ error: 'Tenant ID is required' });
+  }
+
+  // Find the tenant
+  const tenantIndex = global.mockTenants.findIndex(t => t.id == tenantId);
+  if (tenantIndex === -1) {
+    return res.status(404).json({ error: 'Tenant not found' });
+  }
+
+  const tenant = global.mockTenants[tenantIndex];
+
+  // Remove the tenant
+  global.mockTenants.splice(tenantIndex, 1);
+
+  // Update property occupancy
+  const property = global.mockProperties.find(p => p.id === tenant.propertyId);
+  if (property) {
+    property.occupied_units = Math.max(0, property.occupied_units - 1);
+    property.available_units = Math.max(0, property.available_units + 1);
+  }
+
+  // Remove associated payments
+  const initialPaymentsLength = global.mockPayments.length;
+  for (let i = global.mockPayments.length - 1; i >= 0; i--) {
+    if (global.mockPayments[i].tenantEmail === tenant.email) {
+      global.mockPayments.splice(i, 1);
+    }
+  }
+  const removedPayments = initialPaymentsLength - global.mockPayments.length;
+
+  // Remove associated maintenance requests
+  let removedRequests = 0;
+  if (global.mockMaintenanceRequests) {
+    const initialRequestsLength = global.mockMaintenanceRequests.length;
+    for (let i = global.mockMaintenanceRequests.length - 1; i >= 0; i--) {
+      if (global.mockMaintenanceRequests[i].tenantEmail === tenant.email) {
+        global.mockMaintenanceRequests.splice(i, 1);
+      }
+    }
+    removedRequests = initialRequestsLength - global.mockMaintenanceRequests.length;
+  }
+
+  res.json({
+    message: 'Tenant removed successfully',
+    removedData: {
+      tenant: tenant.name,
+      payments: removedPayments,
+      maintenanceRequests: removedRequests || 0
+    }
+  });
+});
+
+// For all other API routes, return a helpful message
+app.use('/api/*', (req, res) => {
+  res.status(501).json({ 
+    error: 'API endpoint not implemented yet',
+    endpoint: req.path,
+    method: req.method,
+    message: 'This API endpoint is being developed. Please check back later.'
+  });
+});
+
+// Serve the React app for all other routes (except API routes)
+app.get('*', (req, res) => {
+  if (!req.path.startsWith('/api')) {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  }
+});
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📱 Web app available`);
+  console.log(`🔧 API endpoints available at /api/*`);
+  console.log(`📝 Mock API server ready for production`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // Initialize demo data for testing
+  initializeDemoData();
+});
+
+function initializeDemoData() {
+  // Initialize global arrays if they don't exist
+  if (!global.mockUsers) global.mockUsers = [];
+  if (!global.mockProperties) global.mockProperties = [];
+  if (!global.mockTenants) global.mockTenants = [];
+  if (!global.mockPayments) global.mockPayments = [];
+  if (!global.mockMaintenanceRequests) global.mockMaintenanceRequests = [];
+  if (!global.mockReminders) global.mockReminders = [];
+  if (!global.mockTenantNotifications) global.mockTenantNotifications = {};
+
+  // Add demo owner if not exists
+  const demoOwner = global.mockUsers.find(u => u.email === 'owner@example.com');
+  if (!demoOwner) {
+    global.mockUsers.push({
+      id: 'demo-owner-1',
+      name: 'Demo Owner',
+      email: 'owner@example.com',
+      password: '$2b$10$demo.hash.for.testing.only',
+      userType: 'owner',
+      phone: '+91 9876543210',
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  // Add demo property if not exists
+  const demoProperty = global.mockProperties.find(p => p.ownerEmail === 'owner@example.com');
+  if (!demoProperty) {
+    global.mockProperties.push({
+      id: 'demo-property-1',
+      name: 'Demo Apartment Complex',
+      address: '123 Demo Street, Demo City',
+      property_type: 'apartment',
+      total_units: 10,
+      occupied_units: 2,
+      available_units: 8,
+      ownerEmail: 'owner@example.com',
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  // Add demo tenant if not exists
+  const demoTenant = global.mockTenants.find(t => t.email === 'tenant@example.com');
+  if (!demoTenant) {
+    global.mockTenants.push({
+      id: 'demo-tenant-1',
+      propertyId: 'demo-property-1',
+      email: 'tenant@example.com',
+      name: 'Demo Tenant',
+      unit: '101',
+      rent_amount: '15000',
+      rent_due_date: new Date().toISOString().split('T')[0],
+      rent_status: 'pending',
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  console.log('✅ Demo data initialized');
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
